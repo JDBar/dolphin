@@ -21,10 +21,11 @@
 MemoryWatcher::MemoryWatcher()
 {
   m_running = false;
-  if (!OpenSocket(File::GetUserPath(F_MEMORYWATCHERSOCKET_IDX)))
-    return;
   if (!LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX)))
     return;
+  if (!OpenSocket(File::GetUserPath(F_MEMORYWATCHERSOCKET_IDX)))
+    return;
+  DEBUG_LOG_FMT(CORE, "MemoryWatcher is active.");
   m_running = true;
 }
 
@@ -80,15 +81,6 @@ bool MemoryWatcher::OpenSocket(const std::string& path)
       nullptr
     );
 
-    if (m_pipe != INVALID_HANDLE_VALUE)
-    {
-      DEBUG_LOG_FMT(CORE, "Named pipe is open, very happy face.");
-    }
-    else
-    {
-      DEBUG_LOG_FMT(CORE, "Named pipe not open, very sad face.");
-    }
-
     return m_pipe != INVALID_HANDLE_VALUE;
   #else
     m_addr.sun_family = AF_UNIX;
@@ -114,6 +106,7 @@ u32 MemoryWatcher::ChasePointer(const std::string& line)
 std::string MemoryWatcher::ComposeMessages()
 {
   std::ostringstream message_stream;
+  message_stream.imbue(std::locale::classic());
   message_stream << std::hex;
 
   for (auto& entry : m_values)
@@ -126,7 +119,9 @@ std::string MemoryWatcher::ComposeMessages()
     {
       // Update the value
       current_value = new_value;
-      message_stream << address << '\n' << new_value << '\n';
+      message_stream << address << '\n'
+                     << std::setfill('0') << std::setw(8) << std::hex
+                     << int(new_value) << '\n';
     }
   }
 
