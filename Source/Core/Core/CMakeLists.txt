@@ -683,7 +683,7 @@ if(GDBSTUB)
   )
 endif()
 
-if(UNIX)
+if(UNIX OR WIN32)
   target_sources(core PRIVATE
     MemoryWatcher.cpp
     MemoryWatcher.h

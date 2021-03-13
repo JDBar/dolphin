@@ -5,9 +5,15 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#ifdef _WIN32
+#include <fileapi.h>
+#include <handleapi.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "Common/FileUtil.h"
+#include "Common/Logging/Log.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/MemoryWatcher.h"
 #include "Core/PowerPC/MMU.h"
@@ -15,9 +21,9 @@
 MemoryWatcher::MemoryWatcher()
 {
   m_running = false;
-  if (!LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX)))
-    return;
   if (!OpenSocket(File::GetUserPath(F_MEMORYWATCHERSOCKET_IDX)))
+    return;
+  if (!LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX)))
     return;
   m_running = true;
 }
@@ -28,7 +34,11 @@ MemoryWatcher::~MemoryWatcher()
     return;
 
   m_running = false;
-  close(m_fd);
+  #ifdef _WIN32
+    CloseHandle(m_pipe);
+  #else
+    close(m_fd);
+  #endif
 }
 
 bool MemoryWatcher::LoadAddresses(const std::string& path)
@@ -59,11 +69,34 @@ void MemoryWatcher::ParseLine(const std::string& line)
 
 bool MemoryWatcher::OpenSocket(const std::string& path)
 {
-  m_addr.sun_family = AF_UNIX;
-  strncpy(m_addr.sun_path, path.c_str(), sizeof(m_addr.sun_path) - 1);
+  #ifdef _WIN32
+    m_pipe = CreateFile(
+      L"\\\\.\\pipe\\Dolphin Emulator\\MemoryWatcher",
+      GENERIC_READ | GENERIC_WRITE,
+      0,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr
+    );
 
-  m_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-  return m_fd >= 0;
+    if (m_pipe != INVALID_HANDLE_VALUE)
+    {
+      DEBUG_LOG_FMT(CORE, "Named pipe is open, very happy face.");
+    }
+    else
+    {
+      DEBUG_LOG_FMT(CORE, "Named pipe not open, very sad face.");
+    }
+
+    return m_pipe != INVALID_HANDLE_VALUE;
+  #else
+    m_addr.sun_family = AF_UNIX;
+    strncpy(m_addr.sun_path, path.c_str(), sizeof(m_addr.sun_path) - 1);
+
+    m_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    return m_fd >= 0;
+  #endif
 }
 
 u32 MemoryWatcher::ChasePointer(const std::string& line)
@@ -106,6 +139,13 @@ void MemoryWatcher::Step()
     return;
 
   std::string message = ComposeMessages();
-  sendto(m_fd, message.c_str(), message.size() + 1, 0, reinterpret_cast<sockaddr*>(&m_addr),
-         sizeof(m_addr));
+
+  #ifdef _WIN32
+    unsigned long written;
+    if (m_pipe != INVALID_HANDLE_VALUE)
+      WriteFile(m_pipe, message.c_str(), static_cast<DWORD>(message.size() + 1), &written, nullptr);
+  #else
+    sendto(m_fd, message.c_str(), message.size() + 1, 0, reinterpret_cast<sockaddr*>(&m_addr),
+           sizeof(m_addr));
+  #endif
 }

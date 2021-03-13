@@ -343,6 +343,9 @@ static void CpuThread(const std::optional<std::string>& savestate_path, bool del
 
 #ifdef USE_MEMORYWATCHER
   s_memory_watcher = std::make_unique<MemoryWatcher>();
+  DEBUG_LOG_FMT(CORE, "Using MemoryWatcher!!!!!!!");
+#else
+  DEBUG_LOG_FMT(CORE, "Not using MemoryWatcher?????????????");
 #endif
 
   if (savestate_path)
