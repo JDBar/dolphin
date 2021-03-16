@@ -42,6 +42,8 @@ private:
 
   #ifdef _WIN32
     void* m_pipe;
+    unsigned long m_lastError;
+    char m_readBuffer[1024 * 16];
   #else
     sockaddr_un m_addr{};
   #endif

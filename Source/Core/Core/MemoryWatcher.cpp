@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #ifdef _WIN32
+#include <windows.h>
 #include <fileapi.h>
 #include <handleapi.h>
 #else
@@ -21,11 +22,10 @@
 MemoryWatcher::MemoryWatcher()
 {
   m_running = false;
-  if (!LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX)))
-    return;
   if (!OpenSocket(File::GetUserPath(F_MEMORYWATCHERSOCKET_IDX)))
     return;
-  DEBUG_LOG_FMT(CORE, "MemoryWatcher is active.");
+  LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX));
+  INFO_LOG_FMT(CORE, "MemoryWatcher is active.");
   m_running = true;
 }
 
@@ -71,15 +71,27 @@ void MemoryWatcher::ParseLine(const std::string& line)
 bool MemoryWatcher::OpenSocket(const std::string& path)
 {
   #ifdef _WIN32
-    m_pipe = CreateFile(
-      L"\\\\.\\pipe\\Dolphin Emulator\\MemoryWatcher",
-      GENERIC_READ | GENERIC_WRITE,
-      0,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL,
-      nullptr
+    //m_pipe = CreateFile(
+    //  L"\\\\.\\pipe\\Dolphin Emulator\\MemoryWatcher",
+    //  GENERIC_READ | GENERIC_WRITE,
+    //  0,
+    //  nullptr,
+    //  OPEN_EXISTING,
+    //  FILE_ATTRIBUTE_NORMAL,
+    //  nullptr
+    //);
+
+    m_pipe = CreateNamedPipe(
+      TEXT("\\\\.\\pipe\\Dolphin Emulator\\MemoryWatcher"),
+      PIPE_ACCESS_DUPLEX,
+      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
+      1,
+      1024 * 16,
+      1024 * 16,
+      NMPWAIT_USE_DEFAULT_WAIT,
+      NULL
     );
+    ConnectNamedPipe(m_pipe, NULL);
 
     return m_pipe != INVALID_HANDLE_VALUE;
   #else
@@ -133,12 +145,56 @@ void MemoryWatcher::Step()
   if (!m_running)
     return;
 
-  std::string message = ComposeMessages();
+  std::string memoryChanges = ComposeMessages();
 
   #ifdef _WIN32
+    DWORD dwRead;
+
+    if (m_pipe == INVALID_HANDLE_VALUE)
+    {
+      return;
+    }
+
+    // Receive messages.
+    while (ReadFile(m_pipe, m_readBuffer, sizeof(m_readBuffer) - 1, &dwRead, NULL))
+    {
+      if (dwRead <= 0)
+        continue;
+
+      m_readBuffer[dwRead] = '\0';
+      std::string message(m_readBuffer);
+
+      INFO_LOG_FMT(CORE, "MemoryWatcher message recieved: {}", message);
+
+      std::string ack = "ACK\n" + message;
+      WriteFile(m_pipe, ack.c_str(), static_cast<DWORD>(ack.size() + 1), NULL, NULL);
+    }
+
+    // Send changes
     unsigned long written;
-    if (m_pipe != INVALID_HANDLE_VALUE)
-      WriteFile(m_pipe, message.c_str(), static_cast<DWORD>(message.size() + 1), &written, nullptr);
+    if (memoryChanges.length())
+    {
+      std::string message = "CHANGED\n" + memoryChanges;
+      WriteFile(m_pipe, message.c_str(), static_cast<DWORD>(message.length() + 1), &written, nullptr);
+    }
+
+    unsigned long error = GetLastError();
+    if (error == m_lastError)
+      return;
+    m_lastError = error;
+    switch (error)
+    {
+      case ERROR_BROKEN_PIPE:
+        DisconnectNamedPipe(m_pipe);
+        ConnectNamedPipe(m_pipe, NULL);
+        break;
+      case ERROR_NO_DATA:
+        break;
+      default:
+        INFO_LOG_FMT(CORE, "MemoryWatcher pipe error code: {}", error);
+        break;
+    }
+
   #else
     sendto(m_fd, message.c_str(), message.size() + 1, 0, reinterpret_cast<sockaddr*>(&m_addr),
            sizeof(m_addr));
